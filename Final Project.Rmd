@@ -1,0 +1,234 @@
+---
+title: "DS 3001 Final Project"
+author: "Hallie Khuong, Tiffanie Luong, Allison Feeney"
+output:
+  html_document:
+    toc: yes
+    theme: journal
+    toc_float: yes
+    df_print: paged
+  flexdashboard::flex_dashboard:
+    theme: cosmo
+    orientation: columns
+    vertical_layout: fill
+  pdf_document:
+    toc: yes
+editor_options:
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r, echo = FALSE, message = FALSE}
+
+library(dplyr)
+library(tidyverse)
+library(rio)
+library(plyr)
+library(rpart)
+library(psych)
+library(pROC)
+library(rpart.plot)
+library(rattle)
+library(caret)
+library(C50) 
+library(mlbench)
+
+```
+
+```{r}
+heart <- read_csv("heart.csv")
+
+
+female <- heart[heart$sex == 0, ] %>% slice(rep(1:n(), each = 3))
+
+
+male <- heart[heart$sex == 1, ] %>% slice(rep(1:n(), each = 2))
+
+```
+
+```{r, out.height="50%", out.width="75%", fig.align='center'}
+# creating tree for both sexes
+both <- rbind(female, male)
+
+set.seed(22903)
+x3 <- createDataPartition(both$target,times = 1,p = 0.8,list=FALSE)
+both_train <- both[x3,]
+both_test <- both[-x3,]
+
+
+both_gini = rpart(target~.,  #<- formula, response variable ~ predictors
+                           #   "." means "use all other variables in data"
+                            method = "class",#<- specify method, use "class" for tree
+                            parms = list(split = "gini"),#<- method for choosing tree split
+                            data = both_train,#<- data used
+                            control = rpart.control(cp=.01))
+
+
+rpart.plot(both_gini, type =4, extra = 101)
+
+
+```
+
+
+
+```{r}
+# creating training and test data
+set.seed(22903)
+x1 <- createDataPartition(female$target,times = 1,p = 0.8,list=FALSE)
+female_train <- female[x1,]
+female_test <- female[-x1,]
+
+
+set.seed(22903)
+x2 <- createDataPartition(male$target,times = 1,p = 0.8,list=FALSE)
+male_train <- male[x2,]
+male_test <- male[-x2,]
+
+
+```
+
+
+```{r}
+# calculating base rate
+female_long = female %>% gather(Var, #<- list of predictor variables
+                                Value,#<- the values of those predictor variables
+                                -target)
+
+female_long_form = ddply(female_long, 
+                            .(Var, Value),#<- group by Var and Value, "." 
+                            #allows us to call the variables without quoting
+                            summarize,  
+                            prob_heart = mean(target), #<- probability of having heart disease
+                            prob_not_heart = 1 - mean(target)) #<- probability of not having heart disease
+
+mean(female_long_form$prob_heart)
+# 0.7257933
+
+
+male_long = male %>% gather(Var, #<- list of predictor variables
+                                Value,#<- the values of those predictor variables
+                                -target)
+
+male_long_form = ddply(male_long, 
+                            .(Var, Value),#<- group by Var and Value, "." 
+                            #allows us to call the variables without quoting
+                            summarize,  
+                            prob_heart = mean(target), #<- probability of having heart disease
+                            prob_not_heart = 1 - mean(target)) #<- probability of not having heart disease
+
+mean(male_long_form$prob_heart)
+# 0.4214128
+
+
+```
+
+
+```{r}
+# creating tree
+female_gini = rpart(target~.,  #<- formula, response variable ~ predictors
+                           #   "." means "use all other variables in data"
+                            method = "class",#<- specify method, use "class" for tree
+                            parms = list(split = "gini"),#<- method for choosing tree split
+                            data = female_train,#<- data used
+                            control = rpart.control(cp=.01))
+
+
+male_gini = rpart(target~.,  #<- formula, response variable ~ predictors
+                           #   "." means "use all other variables in data"
+                            method = "class",#<- specify method, use "class" for tree
+                            parms = list(split = "gini"),#<- method for choosing tree split
+                            data = male_train,#<- data used
+                            control = rpart.control(cp=.01))
+
+
+```
+
+
+```{r, out.height="50%", out.width="75%", fig.align='center'}
+# looking at output using CART
+rpart.plot(female_gini, type =4, extra = 101)
+
+
+rpart.plot(male_gini, type =4, extra = 101)
+
+
+```
+
+
+```{r}
+# creating model using C5.0
+female_train$target <- as.factor(female_train$target)
+female_mdl <- C5.0(target ~ ., female_train)
+
+#female_mdl
+
+
+male_train$target <- as.factor(male_train$target)
+male_mdl <- C5.0(target ~ ., male_train)
+
+#male_mdl
+
+
+```
+
+
+
+```{r}
+# predicting classes using the model
+female_predict = predict(female_mdl,female_test)
+total_female = length(female_predict)
+
+male_predict = predict(male_mdl,male_test)
+total_male = length(male_predict)
+
+# creating a matrix
+female_confusionmatrix <- confusionMatrix(as.factor(female_predict), as.factor(female_test$target), 
+                dnn=c("Prediction", "Actual"), mode = "sens_spec")
+male_confusionmatrix <- confusionMatrix(as.factor(male_predict), as.factor(male_test$target), 
+                dnn=c("Prediction", "Actual"), mode = "sens_spec")
+
+# getting metrics we want to look at 
+female_accuracy = female_confusionmatrix$overall["Accuracy"]
+female_tpr = female_confusionmatrix$byClass["Sensitivity"]
+female_fpr = 1-female_confusionmatrix$byClass["Specificity"]
+female_detection_rate <- sum((female_predict == female_test$target) & (female_predict == 1))
+female_percent = female_detection_rate/total_female
+
+male_accuracy = male_confusionmatrix$overall["Accuracy"]
+male_tpr = male_confusionmatrix$byClass["Sensitivity"]
+male_fpr = 1-male_confusionmatrix$byClass["Specificity"]
+male_detection_rate <- sum((male_predict == male_test$target) & (male_predict == 1))
+male_percent = male_detection_rate/total_male
+
+#putting the metrics in a table
+
+female_results = matrix(c(female_accuracy, female_tpr, female_fpr, female_percent), ncol = 4)
+colnames(female_results) = c("Accuracy", "TPR", "FPR", "Detection Rate")
+rownames(female_results) = ""
+female_results
+
+
+female_base <- sum(female_test$target == 1)/total_female
+
+female_prop <- female_percent/female_base
+female_prop
+
+male_results = matrix(c(male_accuracy, male_tpr, male_fpr, male_percent), ncol = 4)
+colnames(male_results) = c("Accuracy", "TPR", "FPR", "Detection Rate")
+rownames(male_results) = ""
+male_results
+
+male_base <- sum(male_test$target == 1)/total_male
+
+male_prop <- male_percent/male_base
+male_prop
+
+
+```
+
+
+
