@@ -1,0 +1,686 @@
+---
+title: "DS 3001 Final Project"
+author: "Hallie Khuong, Tiffanie Luong, Allison Feeney"
+output:
+  html_document:
+    toc: yes
+    theme: journal
+    toc_float: yes
+    df_print: paged
+  flexdashboard::flex_dashboard:
+    theme: cosmo
+    orientation: columns
+    vertical_layout: fill
+  pdf_document:
+    toc: yes
+editor_options:
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, echo = FALSE, message = FALSE ,warning = FALSE)
+```
+
+
+```{r, echo = FALSE, message = FALSE}
+library(dplyr)
+library(tidyverse)
+library(rio)
+library(plyr)
+library(rpart)
+library(psych)
+library(pROC)
+library(rpart.plot)
+library(rattle)
+library(caret)
+#install.packages(C50)
+library(C50) 
+#install.packages(mlbench)
+library(mlbench)
+library(fairness)
+```
+## Introduction
+
+### Question: What factors are the best indicators of heart disease for men and women? 
+
+Researchers at Harvard have found that men were about twice as likely as females to have a heart attack, and that higher risk persisted even after they accounted for traditional risk factors for heart disease, including high cholesterol, high blood pressure, diabetes, body mass index, and physical activity. This was supported by our data set as our initial base rate was found to be 66% male of our heart disease data set. Since males make up the majority of the subjects, the treatments that are being developed for heart disease are going to be more geared towards men. 
+
+Because of this, we want to look at the important contributing factors for each gender in order to see if there are different important factors for females. 
+
+## Data Exploration
+
+The variables that we’re going to be looking at are age, sex, cp, trestbp, chol, fbs, restecg, thalach, exang, oldpeak, slope, and ca. 
+
+Age represents the age of the patient in years
+
+Sex represents the gender of the patient
+
+  1 = male
+  
+  0 = female
+  
+  
+Cp represents chest pain type 
+
+  1 = typical angina,
+  
+  2 = atypical angina
+  
+  3 = non-anginal pain
+  
+  4 = asymptomatic
+  
+  
+Trestbp represents resting blood pressure in mm Hg on admission to the hospital
+
+Chol represents serum cholesterol in mg/dl
+
+Fbs represents whether or not the patients fasting blood sugar is greater than 120 mg/dl
+
+  1 = true
+  
+  0 = false
+  
+  
+Restecg represents the resting electrocardiographic results
+  
+  0 = normal
+  
+  1 =  having ST-T wave abnormality (T wave inversions and/or ST elevation or depression of > 0.05 mV)
+  
+  2 = showing probable or definite left ventricular hypertrophy by Estes' criteria
+  
+  
+Thalach represents the maximum heart rate achieved
+
+Exang represents exercise induced angina 
+  
+  1 = yes
+  
+  0 = no
+  
+  
+Oldpeak represents ST depression induced by exercise relative to rest
+
+Slope represents the slope of the peak exercise ST segment
+  
+  1 = upsloping
+  
+  2 = flat
+  
+  3 = downsloping
+  
+  
+Ca represents the number of major vessels (0-3) colored by fluoroscopy
+
+
+```{r}
+#load data
+heart <- read_csv("heart.csv")
+
+```
+
+```{r, Gender} 
+#sum(heart$sex)/303
+#1-sum(heart$sex)/303
+```
+### Gender Distribution
+<style type="text/css">
+.tg  {border-collapse:collapse;border-spacing:0;}
+.tg td{border-color:black;border-style:solid;border-width:1px;font-family:Arial, sans-serif;font-size:14px;
+  overflow:hidden;padding:10px 5px;word-break:normal;}
+.tg th{border-color:black;border-style:solid;border-width:1px;font-family:Arial, sans-serif;font-size:14px;
+  font-weight:normal;overflow:hidden;padding:10px 5px;word-break:normal;}
+.tg .tg-0pky{border-color:inherit;text-align:left;vertical-align:top}
+</style>
+<table class="tg">
+<thead>
+  <tr>
+    <th class="tg-0pky"></th>
+    <th class="tg-0pky">Gender Balance</th>
+  </tr>
+</thead>
+<tbody>
+  <tr>
+    <td class="tg-0pky">Female</td>
+    <td class="tg-0pky">0.3168317</td>
+  </tr>
+  <tr>
+    <td class="tg-0pky">Male</td>
+    <td class="tg-0pky">0.6831683</td>
+  </tr>
+</tbody>
+</table>
+
+
+### Age Distribution
+```{r}
+#look at age distribution of data set
+p<-ggplot(
+data=heart,
+aes(x = age)
+)+
+  theme_minimal()+
+geom_histogram(bins = 8)
+
+
+
+```
+### 3D Plot of parameters
+Plotted a few variables against each other to see if a pattern emerged.
+```{r 3D plot}
+
+#plot variables against each other to see if a pattern emerges
+
+library(plotly)
+
+fig <- plot_ly(heart, x = ~thalach, y = ~trestbps, z = ~age, color = ~target , size = 4)
+fig <- fig %>% add_markers()
+fig <- fig %>% layout(scene = list(xaxis = list(title = 'Max Heartrate (bpm)'),
+                                   yaxis = list(title = 'Resting Blood Pressure (mmHg)'),
+                                   zaxis = list(title = 'Age (years)')),
+                      title = 'Max Heartrate vs Resting Blood Pressure vs Age',
+                      font = list(family = "sans serif",
+  size = 10,
+  color = 'black'))
+fig
+```
+
+ 
+Slight pattern: high max heart rate correlated with heart disease
+
+But in general, difficult to interpret so we decided to use a decision tree model to better understand how these stats correlate with heart disease. 
+
+
+```{r Split into male and female}
+female <- heart[heart$sex == 0, ] %>% slice(rep(1:n(), each = 3))
+male <- heart[heart$sex == 1, ] %>% slice(rep(1:n(), each = 2))
+```
+But before building decision trees, calculated the base rate of each gender's likelyhood of having heart disease
+
+### Base Rate
+
+<style type="text/css">
+.tg  {border-collapse:collapse;border-spacing:0;}
+.tg td{border-color:black;border-style:solid;border-width:1px;font-family:Arial, sans-serif;font-size:14px;
+  overflow:hidden;padding:10px 5px;word-break:normal;}
+.tg th{border-color:black;border-style:solid;border-width:1px;font-family:Arial, sans-serif;font-size:14px;
+  font-weight:normal;overflow:hidden;padding:10px 5px;word-break:normal;}
+.tg .tg-0pky{border-color:inherit;text-align:left;vertical-align:top}
+</style>
+<table class="tg">
+<thead>
+  <tr>
+    <th class="tg-0pky"></th>
+    <th class="tg-0pky">Probability of Having Heart Disease</th>
+  </tr>
+</thead>
+<tbody>
+  <tr>
+    <td class="tg-0pky">Female</td>
+    <td class="tg-0pky">0.7257933</td>
+  </tr>
+  <tr>
+    <td class="tg-0pky">Male</td>
+    <td class="tg-0pky">0.4214128</td>
+  </tr>
+</tbody>
+</table>
+
+In this data set, women are far more likely to have heart disease.
+
+## Initial Tree for both genders
+
+
+```{r, out.height="50%", out.width="75%", fig.align='center'}
+# creating tree for both sexes
+both <- rbind(female, male)
+set.seed(22903)
+x3 <- createDataPartition(both$target,times = 1,p = 0.8,list=FALSE)
+both_train <- both[x3,]
+both_test <- both[-x3,]
+both_gini = rpart(target~.,  #<- formula, response variable ~ predictors
+                           #   "." means "use all other variables in data"
+                            method = "class",#<- specify method, use "class" for tree
+                            parms = list(split = "gini"),#<- method for choosing tree split
+                            data = both_train,#<- data used
+                            control = rpart.control(cp=.01))
+rpart.plot(both_gini, type =4, extra = 101)
+```
+As can be seen from the initial decision tree, the most important factors are chest pain type, age, and maximum heart rate. 
+
+
+## Building the Model
+Since we are comparing the variables that play a factor in determining if someone has heart disease between genders, we first split our dataset between males and females. Due to our original dataset not being quite as large as we would have liked and the fact that we were further dividing the data up, we decided to oversample our data in order to essentially have more data for the model to train on. We had to be careful about oversampling too much, as it would cause the model to test all of the observations it had already trained on, resulting in overfitting. As a result, we decided to oversample the male subset twice and the female subset three times in order to increase our sample size and keep the original ratio of males to females observed. 
+	We created training and testing data for each of our models and then produced decision trees using the rpart() function. The decision tree for females is shown below.
+
+
+```{r}
+# creating training and test data
+set.seed(22903)
+x1 <- createDataPartition(female$target,times = 1,p = 0.8,list=FALSE)
+female_train <- female[x1,]
+female_test <- female[-x1,]
+set.seed(22903)
+x2 <- createDataPartition(male$target,times = 1,p = 0.8,list=FALSE)
+male_train <- male[x2,]
+male_test <- male[-x2,]
+```
+
+
+```{r}
+# calculating base rate
+female_long = female %>% gather(Var, #<- list of predictor variables
+                                Value,#<- the values of those predictor variables
+                                -target)
+female_long_form = ddply(female_long, 
+                            .(Var, Value),#<- group by Var and Value, "." 
+                            #allows us to call the variables without quoting
+                            summarize,  
+                            prob_heart = mean(target), #<- probability of having heart disease
+                            prob_not_heart = 1 - mean(target)) #<- probability of not having heart disease
+#mean(female_long_form$prob_heart)
+# 0.7257933
+male_long = male %>% gather(Var, #<- list of predictor variables
+                                Value,#<- the values of those predictor variables
+                                -target)
+male_long_form = ddply(male_long, 
+                            .(Var, Value),#<- group by Var and Value, "." 
+                            #allows us to call the variables without quoting
+                            summarize,  
+                            prob_heart = mean(target), #<- probability of having heart disease
+                            prob_not_heart = 1 - mean(target)) #<- probability of not having heart disease
+#mean(male_long_form$prob_heart)
+# 0.4214128
+```
+
+
+
+```{r}
+# creating tree
+female_gini = rpart(target~.,  #<- formula, response variable ~ predictors
+                           #   "." means "use all other variables in data"
+                            method = "class",#<- specify method, use "class" for tree
+                            parms = list(split = "gini"),#<- method for choosing tree split
+                            data = female_train,#<- data used
+                            control = rpart.control(cp=.01))
+
+male_gini = rpart(target~.,  #<- formula, response variable ~ predictors
+                           #   "." means "use all other variables in data"
+                            method = "class",#<- specify method, use "class" for tree
+                            parms = list(split = "gini"),#<- method for choosing tree split
+                            data = male_train,#<- data used
+                            control = rpart.control(cp=.01))
+```
+
+### Decision Trees broken up by gender {.tabset}
+
+#### Female Decision Tree
+```{r, out.height="50%", out.width="75%", fig.align='center'}
+# looking at output using CART
+rpart.plot(female_gini, type =4, extra = 101)
+#rpart.plot(male_gini, type =4, extra = 101)
+```
+
+As we can see, the first split comes from the variable thal, meaning that the most important predictor for a female of having heart disease is her thal value. A thal value greater than or equal to three will more likely cause the model to classify a female to not have heart disease while a female with a thal value less than three will be more likely to be classified as having heart disease. Following a thal value less than three, the most important predicting variables are oldpeak, age, cp, oldpeak again, and then age again. If a female’s thal value is greater than or equal to three, then the next important decision is her cp value.
+
+
+#### Male Decision Tree
+```{r, out.height="50%", out.width="75%", fig.align='center'}
+# looking at output using CART
+#rpart.plot(female_gini, type =4, extra = 101)
+rpart.plot(male_gini, type =4, extra = 101)
+```
+
+From this figure, we can see that a male’s chest pain type is the most important predictor of whether or not he has heart disease. Here, if his cp value is less than one, then he is more likely to be classified as not having heart disease. The next important predictors after that are ca, thal, and thal again. If his cp value is greater than or equal to one, then he is more likely to have heart disease, with age, chol, thalach, and then ca and age as the next important variables.
+
+```{r}
+# creating model using C5.0
+female_train$target <- as.factor(female_train$target)
+female_mdl <- C5.0(target ~ ., female_train)
+#female_mdl
+male_train$target <- as.factor(male_train$target)
+male_mdl <- C5.0(target ~ ., male_train)
+#male_mdl
+```
+
+## Model Evaluation
+
+```{r}
+# predicting classes using the model
+female_predict = predict(female_mdl,female_test)
+total_female = length(female_predict)
+male_predict = predict(male_mdl,male_test)
+total_male = length(male_predict)
+# creating a matrix
+female_confusionmatrix <- confusionMatrix(as.factor(female_predict), as.factor(female_test$target), 
+                dnn=c("Prediction", "Actual"), mode = "sens_spec")
+male_confusionmatrix <- confusionMatrix(as.factor(male_predict), as.factor(male_test$target), 
+                dnn=c("Prediction", "Actual"), mode = "sens_spec")
+# getting metrics we want to look at 
+female_accuracy = female_confusionmatrix$overall["Accuracy"]
+female_tpr = female_confusionmatrix$byClass["Sensitivity"]
+female_fpr = 1-female_confusionmatrix$byClass["Specificity"]
+female_detection_rate <- sum((female_predict == female_test$target) & (female_predict == 1))
+female_percent = female_detection_rate/total_female
+male_accuracy = male_confusionmatrix$overall["Accuracy"]
+male_tpr = male_confusionmatrix$byClass["Sensitivity"]
+male_fpr = 1-male_confusionmatrix$byClass["Specificity"]
+male_detection_rate <- sum((male_predict == male_test$target) & (male_predict == 1))
+male_percent = male_detection_rate/total_male
+#putting the metrics in a table
+female_results = matrix(c(female_accuracy, female_tpr, female_fpr, female_percent), ncol = 4)
+colnames(female_results) = c("Accuracy", "TPR", "FPR", "Detection Rate")
+rownames(female_results) = ""
+female_results
+female_base <- sum(female_test$target == 1)/total_female
+female_prop <- female_percent/female_base
+female_prop
+male_results = matrix(c(male_accuracy, male_tpr, male_fpr, male_percent), ncol = 4)
+colnames(male_results) = c("Accuracy", "TPR", "FPR", "Detection Rate")
+rownames(male_results) = ""
+male_results
+male_base <- sum(male_test$target == 1)/total_male
+male_prop <- male_percent/male_base
+male_prop
+```
+
+From our results, we can see that the accuracy for our female model is pretty high, and a decently high true positive rate. We also have a very low false positive rate, which is good because this means that our model isn’t predicting that people have heart disease when they don’t. When we compare our detection rate to our base rate, we also find that we’ve detected around 95% of women who are classified as having heart disease, suggesting that our female model is pretty good.
+
+In terms of our male model, we have a lower accuracy when compared to the female model. At 76% our accuracy is moderately high, but when it comes to medical data, we would want something higher because we don’t want to fail to diagnose patients who have heart disease, and we also don’t want to diagnose someone with heart disease when they don’t actually have it. The true positive rate for males is slightly higher than that of females suggesting that slightly more males were correctly diagnosed as having heart disease. The male model also had a lower false positive rate 
+
+
+## Fairness {.tabset}
+
+Since we broke the data up into female and male subsets to see what factors affected each, the only other demographic variable we have is age. Want to see if this model is fair for all age groups represented. Broke the data into 3 subsets by the US Census Age Brackets:
+
+1 represents patients 44 years old and younger
+
+2 represents patients between 45 and 64 years old
+
+3 represents patients 65 and older
+
+```{r}
+
+#Since broke data up into female and male subsets to see what factors affected each, the only other demographic variable we have is age. Want to see if this model is fair for all age groups represented.
+
+#first we are going to equality of odds or "proportional parity" and equal opportunity "equal odds" as defined by this package, but we need create a new data frame that includes our set of predicted values and the percentage values associated with each outcome. We will add this to our test set.  
+
+
+for (i in 1:82) 
+  {
+if (male_test[i,1] >= 65) {
+male_test[i,1] = 3 #'65 and over'
+} else if ( male_test[i,1] >= 45) {
+male_test[i,1] = 2 #'45 and over'
+}  else {
+male_test[i,1]=1 #'44 and under'
+}
+}
+
+for (i in 1:57) 
+  {
+if (female_test[i,1] >= 65) {
+female_test[i,1] = 3 #'65 and over'
+} else if ( female_test[i,1] >= 45) {
+female_test[i,1] = 2 #'45 and over'
+}  else {
+female_test[i,1]=1 #'44 and under'
+}
+}
+#view(table(male_test$age))
+
+#Test,Predicted Class and the Probabilities all in one dataframe
+
+```
+
+### Male data
+```{r}
+#first we are going to equality of odds or "proportional parity" and equal opportunity "equal odds" as defined by this package, but we need create a new data frame that includes our set of predicted values and the percentage values associated with each outcome. We will add this to our test set.  
+library(fairness)
+
+table(male_test$age)
+
+male_prob <- predict(male_mdl,male_test, type = 'prob')
+#male_prob
+#male_predict
+#Test,Predicted Class and the Probabilities all in one dataframe
+fair_eval_male <- cbind(male_test, predicted = male_predict, probability = male_prob)
+#view(fair_eval_male)
+
+#head(fair_eval_male)
+
+dpp <- prop_parity(data = fair_eval_male, 
+                   group="age",#protected class
+                   probs = "probability.1",
+                   preds = "predicted",
+                   cutoff = .5,#threshold,
+                   base = 1
+                  )
+
+
+
+#dpp$Metric #We would want these to be 1 across the board, but it's looks like being female appears to be favored, but very little. 
+dev.off()
+#The below plots help to show this story a bit more.
+ddp_metric_plot <- dpp$Metric_plot
+ddp_metric_plot
+
+```
+As can be seen from the proportional parity graphic, the male model favors younger patients. Proportional parity is achieved if the proportion of positive predictions in the subgroups are close to each other. 
+```{r}
+prob_plot <- dpp$Probability_plot #as we can see there's some slight advantages to being female both before the 50% threshold but about the same after the cutoff.
+
+prob_plot
+```
+Looking at the probability plot, younger patients are still favored for both positive and negative predictions
+```{r}
+#We can also look at equal odds measures
+
+eqo_loan <- equal_odds(data = fair_eval_male, 
+           outcome = "target", 
+           group   = "age",
+           probs   = "probability.1", 
+           preds   = "predicted",
+           cutoff = 0.5,
+           base = 1
+          )
+
+eqo_loan$Metric #This is interesting because here it seems the roles are slightly reversed. 
+
+eqo_loan <- ggplotly(eqo_loan$Metric_plot)
+
+eqo_loan
+
+```
+
+However, when we looked a the equalized odds, older patients (subgroup 3) are favored.
+
+Equalized odds are achieved if the sensitivities in the subgroups are close to each other. The group-specific sensitivities indicate the number of the true positives divided by the total number of positives in that group.
+
+
+Predictive Rate Parity
+
+```{r}
+prp <- pred_rate_parity(data = fair_eval_male, 
+           outcome = "target", 
+           group   = "age",
+           probs   = "probability.1", 
+           preds   = "predicted",
+           cutoff = 0.50,
+           base = 1
+           )
+
+prp$Metric
+
+#DT::datatable(prp$Metric, options = list(pageLength = 10))
+
+prp$Metric_plot # As we can see in comparison to those of Japanese decent white and black individuals are being classified much less accurately when it comes to the positive outcome of getting a loan. Keeping in mind this is made up data.  
+
+
+
+```
+Looking at the predictive rate parity, we see that again, younger patients are favored by this model.
+
+```{r}
+prp$Probability_plot
+```
+
+```{r}
+fnr<-fnr_parity(data = fair_eval_male, 
+           outcome = "target", 
+           group   = "age",
+           probs   = "probability.1", 
+           preds   = "predicted",
+           cutoff = 0.50,
+           base = 1
+           )
+ggplotly(fnr$Metric_plot)
+```
+Since we are looking into factors that predict heart disease, false negatives are very important.
+
+
+
+```{r}
+roc_eval <- roc_parity(data = fair_eval_male,
+                   outcome = "target",
+                   group="sex",#protected class
+                   probs = "probability.1",
+                   base = "1")
+
+#roc_eval$ROCAUC_plot #we would likely want to set our threshold at the intersection of these two graphs, but these seems to be a rather minor difference. 
+
+roc_eval_plty <- ggplotly(roc_eval$ROCAUC_plot)
+roc_eval_plty
+```
+
+### Female data
+
+```{r}
+#first we are going to equality of odds or "proportional parity" and equal opportunity "equal odds" as defined by this package, but we need create a new data frame that includes our set of predicted values and the percentage values associated with each outcome. We will add this to our test set.  
+library(fairness)
+
+table(female_test$age)
+
+female_prob <- predict(female_mdl,female_test, type = 'prob')
+#female_prob
+#female_predict
+#Test,Predicted Class and the Probabilities all in one dataframe
+fair_eval_female <- cbind(female_test, predicted = female_predict, probability = female_prob)
+#view(fair_eval_female)
+
+#head(fair_eval_female)
+
+dppf <- prop_parity(data = fair_eval_female, 
+                   group="age",#protected class
+                   probs = "probability.1",
+                   preds = "predicted",
+                   cutoff = .5,#threshold,
+                   base = 1
+                  )
+
+
+
+dppf$Metric #We would want these to be 1 across the board, but it's looks like being female appears to be favored, but very little. 
+dev.off()
+#The below plots help to show this story a bit more.
+ddpf_metric_plot <- dppf$Metric_plot
+ddpf_metric_plot
+
+
+
+#We can also look at equal odds measures
+
+
+
+```
+Looking at the Proportional Parity for the female dataset, younger female patients are more likely to be classified correctly. 
+```{r}
+prob_plotf <- dppf$Probability_plot #as we can see there's some slight advantages to being female both before the 50% threshold but about the same after the cutoff.
+
+prob_plotf
+```
+
+```{r}
+eqo_f <- equal_odds(data = fair_eval_female, 
+           outcome = "target", 
+           group   = "age",
+           probs   = "probability.1", 
+           preds   = "predicted",
+           cutoff = 0.5,
+           base = 2
+          )
+
+eqo_f$Metric #This is interesting because here it seems the roles are slightly reversed. 
+
+eqo_f <- ggplotly(eqo_f$Metric_plot)
+
+eqo_f
+```
+Looking, at the equal odds of the female dataset, older women are more likely to be classified correctly. However, this model doesn't work well for this data set because there are no True Positive classifications for the youngest age bracket.
+
+Predictive Rate Parity
+
+```{r}
+prpf <- pred_rate_parity(data = fair_eval_female, 
+           outcome = "target", 
+           group   = "age",
+           probs   = "probability.1", 
+           preds   = "predicted",
+           cutoff = 0.50,
+           base = 2
+           )
+
+prpf$Metric
+
+DT::datatable(prpf$Metric, options = list(pageLength = 10))
+
+prpf$Metric_plot # As we can see in comparison to those of Japanese decent white and black individuals are being classified much less accurately when it comes to the positive outcome of getting a loan. Keeping in mind this is made up data.  
+
+```
+A similar pattern appears for predictive rate parity again, because there are no true positive classifications for the youngest age group. 
+```{r}
+#prpf$Probability_plot
+```
+
+```{r}
+fnrf<-fnr_parity(data = fair_eval_female, 
+           outcome = "target", 
+           group   = "age",
+           probs   = "probability.1", 
+           preds   = "predicted",
+           cutoff = 0.50,
+           base = 2
+           )
+fnrf$Metric
+ggplotly(fnrf$Metric_plot)
+```
+Looking at this bar chart, we see that women in the middle age bracket are most likely to have a false negative classification. 
+```{r}
+roc_evalf <- roc_parity(data = fair_eval_female,
+                   outcome = "target",
+                   group="sex",#protected class
+                   probs = "probability.1",
+                   base = 1)
+
+#roc_eval$ROCAUC_plot #we would likely want to set our threshold at the intersection of these two graphs, but these seems to be a rather minor difference. 
+
+roc_eval_pltyf <- ggplotly(roc_evalf$ROCAUC_plot)
+roc_eval_pltyf
+```
+
+## Conclusions
+
+The two separate models between males and females shows how our original data was skewed as there were more male observations than females. This is shown by how the most important variable was different between the genders, even though in the combined tree, gender was not the most important predictor. So when talking about the likelihood of a male having heart disease vs a female, observations should be compared within the same gender and not the other gender as each gender has different factors that help determine if they have heart disease.
+
+Prop of females with heart disease > prop of male with heart disease; not representative of the population
+
+
+
+# Future Work
+This was a small dataset from a hospital in Cleveland, Ohio. To get a better idea of contributing factors of heart disease for men and women, we would need more data from other areas. This data set is not indicative for the entire country, and especially not of the world. Hopefully with more data, we would have a better balance between men and women. And our base rate would be closer to national averages of heart disease. 
+
+We could also expand the model to people younger than their late 30s so we can find ways that younger people can take preventative measures early against heart disease. 
+
+
+
